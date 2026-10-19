@@ -252,21 +252,25 @@ with st.sidebar:
                 st.error("Upload a PDF or enter a web page or YouTube URL first.")
             else:
                 try:
-                    if pdf_file:
-                        safe_filename = Path(
-                            pdf_file.name.replace("\\", "/")
-                        ).name
-                        with tempfile.TemporaryDirectory(
-                            prefix="rag-upload-"
-                        ) as tmp_dir:
-                            pdf_path = Path(tmp_dir) / safe_filename
-                            pdf_path.write_bytes(pdf_file.getvalue())
-                            ingest_main(["--pdf", str(pdf_path)])
-                    if url_input:
-                        ingest_main(["--url", url_input])
-                    if yt_url:
-                        ingest_main(["--youtube", yt_url])
-                    st.success("Ingestion complete.")
+                    with st.spinner(
+                        "Ingesting your document/source. This may take a moment; "
+                        "please wait."
+                    ):
+                        if pdf_file:
+                            safe_filename = Path(
+                                pdf_file.name.replace("\\", "/")
+                            ).name
+                            with tempfile.TemporaryDirectory(
+                                prefix="rag-upload-"
+                            ) as tmp_dir:
+                                pdf_path = Path(tmp_dir) / safe_filename
+                                pdf_path.write_bytes(pdf_file.getvalue())
+                                ingest_main(["--pdf", str(pdf_path)])
+                        if url_input:
+                            ingest_main(["--url", url_input])
+                        if yt_url:
+                            ingest_main(["--youtube", yt_url])
+                    st.success("Document/source ingested successfully.")
                 except (ValueError, OSError, psycopg2.Error):
                     logging.exception("Knowledge ingestion failed.")
                     st.error(

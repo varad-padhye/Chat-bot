@@ -110,6 +110,7 @@ rag_chatbot/
    streamlit run frontend/app.py
    ```
    Open the displayed URL (usually `http://localhost:8501`).  Use the sidebar to add new PDFs / URLs and chat with the assistant.
+   The app shows an ingestion-in-progress message while processing and confirms when the document or source has been ingested.
 
 ## Conversations and memory
 
