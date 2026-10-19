@@ -563,7 +563,7 @@ def similarity_search(query: str, k: int = 5) -> List[Document]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT d.text, d.metadata
+                SELECT d.source, d.chunk_index, d.text, d.metadata
                 FROM documents AS d
                 JOIN embeddings AS e ON e.document_id = d.id
                 WHERE e.embedding IS NOT NULL
@@ -575,8 +575,15 @@ def similarity_search(query: str, k: int = 5) -> List[Document]:
             )
             rows = cur.fetchall()
         return [
-            Document(page_content=text, metadata=metadata or {})
-            for text, metadata in rows
+            Document(
+                page_content=text,
+                metadata={
+                    **(metadata or {}),
+                    "source": source,
+                    "chunk_index": chunk_index,
+                },
+            )
+            for source, chunk_index, text, metadata in rows
         ]
     finally:
         conn.close()

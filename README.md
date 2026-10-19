@@ -120,6 +120,9 @@ most-recently-updated ordering. Conversation records and messages are stored
 separately from the RAG documents; deleting a conversation only deletes its
 messages. Messages are reloaded from PostgreSQL on each Streamlit rerun, so
 switching conversations or reconnecting does not mix their short-term context.
+When a question is submitted, it appears immediately while the assistant shows
+a thinking indicator. Answers include an expandable source/context section with
+the retrieved document name, chunk number, and a short excerpt when available.
 
 The last `CHAT_HISTORY_TURNS` turns (default `8`, maximum `50`) are used as
 short-term context. When there is prior history, the workflow first rewrites a

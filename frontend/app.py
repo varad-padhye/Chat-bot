@@ -59,6 +59,49 @@ from backend.memory import remember_user_message
 from backend.workflow import workflow
 
 RAG_USER_ID = os.getenv("RAG_USER_ID", "default").strip() or "default"
+SOURCE_CONTEXT_MARKER = "\n\n---\n\n**Sources and retrieved context**\n"
+
+
+def _with_source_context(answer: str, documents: list) -> str:
+    source_entries = []
+    for document in documents:
+        metadata = getattr(document, "metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        source = metadata.get("source")
+        if isinstance(source, str) and source.strip():
+            source = source.strip()
+            if "://" not in source:
+                source = Path(source.replace("\\", "/")).name or source
+        else:
+            source = "Unknown source"
+
+        chunk_index = metadata.get("chunk_index")
+        chunk_label = (
+            f" (chunk {chunk_index + 1})"
+            if isinstance(chunk_index, int)
+            else ""
+        )
+        excerpt = " ".join(
+            str(getattr(document, "page_content", "")).split()
+        )
+        if len(excerpt) > 300:
+            excerpt = f"{excerpt[:297]}..."
+        source_entries.append(
+            f"- **{source}**{chunk_label}\n  > {excerpt}"
+        )
+
+    if not source_entries:
+        source_entries.append("No document chunks were retrieved.")
+    return f"{answer}{SOURCE_CONTEXT_MARKER}" + "\n".join(source_entries)
+
+
+def _render_assistant_message(content: str) -> None:
+    answer, marker, source_context = content.partition(SOURCE_CONTEXT_MARKER)
+    st.markdown(answer)
+    if marker:
+        with st.expander("Sources and retrieved context"):
+            st.markdown(source_context)
 
 
 @st.cache_resource(show_spinner=False)
@@ -287,7 +330,10 @@ st.subheader(active_conversation["title"])
 
 for message in active_messages:
     with st.chat_message(message["role"]):
-        st.write(message["content"])
+        if message["role"] == "assistant":
+            _render_assistant_message(message["content"])
+        else:
+            st.write(message["content"])
 
 if user_query := st.chat_input("Ask a question about your notes …"):
     if not user_query.strip():
@@ -295,7 +341,14 @@ if user_query := st.chat_input("Ask a question about your notes …"):
         st.stop()
 
     history = [
-        {"role": message["role"], "content": message["content"]}
+        {
+            "role": message["role"],
+            "content": (
+                message["content"].partition(SOURCE_CONTEXT_MARKER)[0]
+                if message["role"] == "assistant"
+                else message["content"]
+            ),
+        }
         for message in active_messages[-history_turns * 2 :]
     ]
     try:
@@ -307,36 +360,46 @@ if user_query := st.chat_input("Ask a question about your notes …"):
         st.error("Your message could not be saved. Please check PostgreSQL.")
         st.stop()
 
-    try:
-        result = workflow.invoke(
-            {
-                "query": user_query,
-                "chat_history": history,
-                "thread_id": active_thread_id,
-                "user_id": RAG_USER_ID,
-                "use_memory": use_memory,
-            },
-            config={"configurable": {"thread_id": active_thread_id}},
+    with st.chat_message("user"):
+        st.write(user_query)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking... searching your notes and preparing an answer."):
+            try:
+                result = workflow.invoke(
+                    {
+                        "query": user_query,
+                        "chat_history": history,
+                        "thread_id": active_thread_id,
+                        "user_id": RAG_USER_ID,
+                        "use_memory": use_memory,
+                    },
+                    config={"configurable": {"thread_id": active_thread_id}},
+                )
+                answer = result.get("answer")
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError("The workflow did not return an answer.")
+            except (psycopg2.Error, ValueError):
+                logging.exception("The RAG workflow could not answer the request.")
+                st.error(
+                    "The answer could not be generated. Check the selected LLM "
+                    "provider, its API key, and database availability."
+                )
+                st.info("Your question is saved in this conversation; you can retry it.")
+                st.stop()
+            except Exception:
+                logging.exception("The configured LLM or RAG workflow failed.")
+                st.error(
+                    "The answer could not be generated. Check your LLM provider "
+                    "configuration and try again."
+                )
+                st.info("Your question is saved in this conversation; you can retry it.")
+                st.stop()
+
+        answer = _with_source_context(
+            answer, result.get("retrieved_docs", [])
         )
-        answer = result.get("answer")
-        if not isinstance(answer, str) or not answer.strip():
-            raise ValueError("The workflow did not return an answer.")
-    except (psycopg2.Error, ValueError):
-        logging.exception("The RAG workflow could not answer the request.")
-        st.error(
-            "The answer could not be generated. Check the selected LLM "
-            "provider, its API key, and database availability."
-        )
-        st.info("Your question is saved in this conversation; you can retry it.")
-        st.stop()
-    except Exception:
-        logging.exception("The configured LLM or RAG workflow failed.")
-        st.error(
-            "The answer could not be generated. Check your LLM provider "
-            "configuration and try again."
-        )
-        st.info("Your question is saved in this conversation; you can retry it.")
-        st.stop()
+        _render_assistant_message(answer)
 
     try:
         save_conversation_message(
