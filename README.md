@@ -28,6 +28,7 @@ flowchart TD
 - **Workflow** – LangGraph state‑graph clarifies follow-up queries from bounded conversation history, then retrieves documents and optional user memories before answer generation.
 - **LLM** – Google Gemini (`gemini‑2.5‑flash`) by default, with optional OpenAI or a local model via Ollama.
 - **Embedding** – Default free local model (`sentence‑transformers/all‑MiniLM‑L6‑v2` or `BAAI/bge‑small‑en‑v1.5`).  Switch to OpenAI embeddings (`text‑embedding‑3‑small`) via an env variable.
+- PDF ingestion stores the original one-based page number with each chunk. Answers include page references when available, and the Sources expander shows the page and retrieved excerpt. Non-PDF sources and existing PDF chunks without page metadata do not show a page number; re-ingest older PDFs to add page citations.
 - The custom `embeddings.embedding` column uses an unconstrained pgvector `VECTOR` so it accepts the configured model's output dimension (MiniLM produces 384, while other models may differ). Database initialization migrates an existing dimension-constrained column without deleting stored vectors.
 
 ## Folder Structure
@@ -165,27 +166,31 @@ python -m unittest discover -s tests -v
 
 ## RAG evaluation
 
-Create a UTF-8 JSON Lines dataset with one object per test case. `question` is
-required; `reference_answer` is optional:
+The original custom LLM-judge evaluator remains available as
+`backend.evaluation`. For standard Ragas metrics, create a UTF-8 JSON Lines
+dataset with one object per test case. `question` is required;
+`reference_answer` (or `ground_truth`) is optional:
 
 ```json
 {"question":"What is the first law of thermodynamics?","reference_answer":"Energy is conserved; it can change forms but cannot be created or destroyed."}
 {"question":"Summarize the uploaded lecture's definition of entropy."}
 ```
 
-Run the local evaluator after ingesting the knowledge you want to test:
+Run the separate Ragas evaluator after ingesting the knowledge you want to test:
 
 ```powershell
-python -m backend.evaluation --dataset eval.jsonl --output evaluation_results.json
+pip install -r requirements.txt
+python -m backend.ragas_evaluation --dataset eval.jsonl --output ragas_results.json
 ```
 
-The script runs each question through the RAG workflow and uses the configured
-LLM as a judge for context relevance, faithfulness (grounding in retrieved
-context), and answer relevance. It also scores answer correctness when a
-reference answer is provided. The JSON report contains per-example scores and
-reasons, contexts, answers, and aggregate means. This is an LLM-judge evaluation,
-not a deterministic substitute for human review; compare runs with the same
-dataset and model configuration.
+The runner invokes the existing RAG workflow with long-term memory disabled,
+then scores faithfulness and answer relevancy for all examples. If examples
+include reference answers, Ragas also calculates context precision, context
+recall, and answer correctness for those rows. The JSON report includes
+per-example answers, retrieved contexts, available metric scores, and mean
+scores. It uses the configured LLM provider and embedding model; evaluation
+calls may use API credits. Ragas metrics are LLM/embedding-based estimates, not
+a substitute for reviewing representative results.
 
 Switching providers only requires changing `LLM_PROVIDER` and, for embeddings,
 `EMBEDDING_MODEL` in `.env`.

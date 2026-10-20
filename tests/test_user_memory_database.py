@@ -6,6 +6,7 @@ from backend.database import (
     delete_user_memory,
     list_user_memories,
     search_user_memories,
+    similarity_search,
     upsert_user_memory,
 )
 
@@ -74,6 +75,22 @@ class UserMemoryDatabaseTests(unittest.TestCase):
         sql, parameters = self.cursor.execute.call_args.args
         self.assertIn("WHERE user_id = %s", sql)
         self.assertEqual(parameters[0], "student-1")
+
+    def test_document_retrieval_preserves_page_and_source_metadata(self):
+        self.cursor.fetchall.return_value = [
+            ("lecture.pdf", 4, "Retrieved page content.", {"page": 12})
+        ]
+
+        with patch(
+            "backend.embeddings.get_embedding_function",
+            return_value=lambda _: [0.1, 0.2],
+        ):
+            documents = similarity_search("page content")
+
+        self.assertEqual(documents[0].metadata["source"], "lecture.pdf")
+        self.assertEqual(documents[0].metadata["page"], 12)
+        self.assertEqual(documents[0].metadata["chunk_index"], 4)
+        self.assertEqual(documents[0].page_content, "Retrieved page content.")
 
     def test_memory_management_is_user_scoped(self):
         self.cursor.fetchall.return_value = [

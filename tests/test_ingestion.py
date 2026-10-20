@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from backend.ingestion import (
     _youtube_video_id,
+    chunk_and_store,
     extract_transcript_from_youtube,
 )
 
@@ -46,6 +47,30 @@ class YouTubeTranscriptTests(unittest.TestCase):
         transcript_api.return_value.fetch.assert_called_once_with(
             "Ty8gcCKuwNI", languages=["en", "hi"]
         )
+
+    def test_pdf_chunks_keep_original_one_based_page_numbers(self):
+        splitter = SimpleNamespace()
+        splitter.create_documents = lambda texts, metadatas: [
+            SimpleNamespace(page_content=text, metadata=metadata)
+            for text, metadata in zip(texts, metadatas)
+        ]
+
+        with (
+            patch("backend.ingestion.get_embedding_function", return_value=lambda _: [0.1]),
+            patch("backend.ingestion.upsert_chunks", return_value=[10, 11]) as upsert,
+        ):
+            ids = chunk_and_store(
+                "First page\n\nThird page",
+                "lecture.pdf",
+                splitter,
+                page_texts=["First page", "", "Third page"],
+            )
+
+        self.assertEqual(ids, [10, 11])
+        chunks, source, embeddings = upsert.call_args.args
+        self.assertEqual(source, "lecture.pdf")
+        self.assertEqual([chunk.metadata["page"] for chunk in chunks], [1, 3])
+        self.assertEqual(embeddings, [[0.1], [0.1]])
 
 
 if __name__ == "__main__":

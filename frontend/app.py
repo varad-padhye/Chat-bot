@@ -82,13 +82,19 @@ def _with_source_context(answer: str, documents: list) -> str:
             if isinstance(chunk_index, int)
             else ""
         )
+        page = metadata.get("page")
+        page_label = (
+            f", page {page}"
+            if isinstance(page, int) and not isinstance(page, bool) and page > 0
+            else ""
+        )
         excerpt = " ".join(
             str(getattr(document, "page_content", "")).split()
         )
         if len(excerpt) > 300:
             excerpt = f"{excerpt[:297]}..."
         source_entries.append(
-            f"- **{source}**{chunk_label}\n  > {excerpt}"
+            f"- **{source}{page_label}**{chunk_label}\n  > {excerpt}"
         )
 
     if not source_entries:

@@ -3,6 +3,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from langchain_core.documents import Document
+
 from backend.workflow import (
     generate_answer,
     resolve_follow_up,
@@ -116,6 +118,53 @@ class FollowUpRetrievalTests(unittest.TestCase):
                 "No relevant previous conversations." in message.content
                 for message in prompt_messages
             )
+        )
+
+    def test_pdf_page_number_is_passed_to_the_answer_context(self):
+        llm = Mock()
+        llm.invoke.return_value = SimpleNamespace(content="Answer with citation.")
+        state = {
+            "query": "What does this page say?",
+            "retrieved_docs": [
+                Document(
+                    page_content="Relevant PDF content.",
+                    metadata={"source": "lecture.pdf", "page": 7},
+                )
+            ],
+        }
+
+        with patch("backend.workflow.get_llm", return_value=llm):
+            generate_answer(state)
+
+        prompt_messages = llm.invoke.call_args.args[0]
+        human_prompt = prompt_messages[-1].content
+        self.assertIn("[Source: lecture.pdf, page 7]", human_prompt)
+        self.assertIn("never invent a page number", prompt_messages[0].content)
+
+    def test_missing_page_number_is_not_invented_in_the_prompt(self):
+        llm = Mock()
+        llm.invoke.return_value = SimpleNamespace(content="Answer.")
+
+        with patch("backend.workflow.get_llm", return_value=llm):
+            generate_answer(
+                {
+                    "query": "Question?",
+                    "retrieved_docs": [
+                        Document(
+                            page_content="Web content.",
+                            metadata={"source": "example.com"},
+                        )
+                    ],
+                }
+            )
+
+        self.assertIn(
+            "[Source: example.com]",
+            llm.invoke.call_args.args[0][-1].content,
+        )
+        self.assertNotIn(
+            "page",
+            llm.invoke.call_args.args[0][-1].content.lower(),
         )
 
     def test_graph_accepts_stable_thread_id_and_completes_without_memory(self):

@@ -105,6 +105,10 @@ def generate_answer(state: RAGState) -> dict:
                 "You are an assistant helping a student study. "
                 "Answer using the provided context. If the context does not "
                 "contain the answer, say you do not know based on the notes. "
+                "Retrieved document sections include source metadata and, for "
+                "PDFs when available, a page number. Cite factual claims with "
+                "the source and page shown in context; never invent a page "
+                "number or source. "
                 "Conversation memory may help with continuity or preferences, "
                 "but is not authoritative study material; rely on retrieved "
                 "document context for factual answers.",
@@ -123,9 +127,22 @@ def generate_answer(state: RAGState) -> dict:
         for message in (state.get("chat_history") or [])
         if message.get("role") in ("user", "assistant")
     ]
-    context = "\n---\n".join(
-        document.page_content for document in (state.get("retrieved_docs") or [])
-    )
+    context_entries = []
+    for document in state.get("retrieved_docs") or []:
+        metadata = document.metadata if isinstance(document.metadata, dict) else {}
+        source = metadata.get("source")
+        page = metadata.get("page")
+        source_label = (
+            source.strip()
+            if isinstance(source, str) and source.strip()
+            else "Unknown source"
+        )
+        if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+            source_label = f"{source_label}, page {page}"
+        context_entries.append(
+            f"[Source: {source_label}]\n{document.page_content}"
+        )
+    context = "\n---\n".join(context_entries)
     memory_context = "\n---\n".join(
         document.page_content for document in (state.get("memory_docs") or [])
     )

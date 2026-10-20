@@ -34,6 +34,12 @@ def extract_text_from_pdf(pdf_path: Path) -> str:
     return "\n".join(text)
 
 
+def extract_pages_from_pdf(pdf_path: Path) -> List[str]:
+    """Extract PDF text page by page so retrieved chunks can cite their page."""
+    reader = PyPDF2.PdfReader(str(pdf_path))
+    return [page.extract_text() or "" for page in reader.pages]
+
+
 def fetch_html(url: str) -> str:
     """Download a web page and return its HTML content.
     Simple GET with a short timeout; raises for non‑200.
@@ -113,11 +119,35 @@ def extract_transcript_from_youtube(video_url: str) -> str:
 # Chunking & storage
 # ---------------------------------------------------------------------------
 
-def chunk_and_store(text: str, source: str, splitter: RecursiveCharacterTextSplitter) -> List[int]:
+def chunk_and_store(
+    text: str,
+    source: str,
+    splitter: RecursiveCharacterTextSplitter,
+    page_texts: Optional[List[str]] = None,
+) -> List[int]:
     """Split ``text`` into chunks, embed them, and upsert into PostgreSQL.
+
+    When ``page_texts`` is provided, keep each PDF page separate and attach its
+    one-based page number to every chunk from that page.
     Returns a list of document IDs inserted.
     """
-    docs = splitter.create_documents([text], metadatas=[{"source": source}])
+    if page_texts is None:
+        docs = splitter.create_documents([text], metadatas=[{"source": source}])
+    else:
+        page_texts_with_content = [
+            (page_number, page_text)
+            for page_number, page_text in enumerate(page_texts, start=1)
+            if page_text.strip()
+        ]
+        if not page_texts_with_content:
+            raise ValueError(f"No extractable text found in {source}.")
+        docs = splitter.create_documents(
+            [page_text for _, page_text in page_texts_with_content],
+            metadatas=[
+                {"source": source, "page": page_number}
+                for page_number, _ in page_texts_with_content
+            ],
+        )
     if not docs:
         raise ValueError(f"No extractable text found in {source}.")
 
@@ -142,8 +172,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         if not args.pdf.is_file():
             sys.exit(f"PDF not found: {args.pdf}")
         print(f" Extracting PDF: {args.pdf}")
-        raw = extract_text_from_pdf(args.pdf)
-        ids = chunk_and_store(raw, source=str(args.pdf), splitter=splitter)
+        page_texts = extract_pages_from_pdf(args.pdf)
+        ids = chunk_and_store(
+            "\n".join(page_texts),
+            source=str(args.pdf),
+            splitter=splitter,
+            page_texts=page_texts,
+        )
         print(f"Stored {len(ids)} chunks from PDF")
 
     if args.url:
