@@ -7,7 +7,7 @@ langchain-community>=0.3,<0.4
 ragas>=0.2.15,<0.3
 # Keep the Ragas dataset stack compatible with the project's NumPy 1.x setup.
 datasets>=2.14,<4
-pyarrow>=15,<20
+pyarrow
 psycopg2-binary>=2.9
 youtube-transcript-api>=1.2,<2
 beautifulsoup4>=4.12
