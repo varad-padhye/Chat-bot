@@ -1,0 +1,52 @@
+# Streamlit Community Cloud puts apps to sleep after ~12h with no visitors.
+# A plain curl doesn't count as a visit (the app only runs when a browser opens a session),
+# so this opens the app in a real headless browser every 6h and clicks the wake button if it's asleep.
+# To point it at another app, change STREAMLIT_APP_URL below.
+# Supabase free projects pause after 7 days without activity. The app visit runs real queries,
+# and the optional last step also queries Supabase directly. To turn it on, add a repo secret
+# SUPABASE_DB_URL = the "Session pooler" connection string from Supabase -> Connect.
+name: Keep Streamlit app awake
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright==1.48.0 && playwright install --with-deps chromium
+      - env:
+          STREAMLIT_APP_URL: https://chat-bot-ndaknv5vxcctzpvh64pltc.streamlit.app/
+        run: |
+          python - <<'EOF'
+          import os, re
+          from playwright.sync_api import sync_playwright
+
+          url = os.environ["STREAMLIT_APP_URL"]
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              page.goto(url, timeout=60_000)
+              wake = page.get_by_role("button", name=re.compile("get this app back up", re.I))
+              try:
+                  wake.click(timeout=15_000)
+                  print("App was asleep: clicked wake button")
+                  page.wait_for_timeout(90_000)  # give it time to boot and load models
+              except Exception:
+                  print("App was already awake")
+                  page.wait_for_timeout(20_000)  # hold a session open so it counts as a visit
+              browser.close()
+          EOF
+      - name: Query Supabase directly (runs only if the SUPABASE_DB_URL secret is set)
+        if: ${{ !cancelled() && env.SUPABASE_DB_URL != '' }}
+        run: |
+          pip install psycopg2-binary==2.9.10
+          python -c "import os, psycopg2; c = psycopg2.connect(os.environ['SUPABASE_DB_URL'], connect_timeout=30); cur = c.cursor(); cur.execute('SELECT count(*) FROM conversations'); print('Supabase reachable, conversations:', cur.fetchone()[0]); c.close()"

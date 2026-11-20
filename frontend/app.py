@@ -54,6 +54,7 @@ from backend.database import (
     rename_conversation,
     save_conversation_message,
 )
+from backend.embeddings import get_embedding_function
 from backend.ingestion import main as ingest_main
 from backend.memory import remember_user_message
 from backend.workflow import workflow
@@ -116,6 +117,13 @@ def initialize_database() -> bool:
     return True
 
 
+@st.cache_resource(show_spinner="Loading the embedding model...")
+def warm_embedding_model() -> bool:
+    # Load (and on a fresh server, download) the model once at startup, not on someone's first question.
+    get_embedding_function()
+    return True
+
+
 def _new_chat(user_id: str) -> None:
     conversation = create_conversation(user_id)
     st.session_state.active_thread_id = conversation["id"]
@@ -124,6 +132,7 @@ def _new_chat(user_id: str) -> None:
 
 try:
     initialize_database()
+    warm_embedding_model()
     conversations = list_conversations(RAG_USER_ID)
 except psycopg2.Error:
     logging.exception("Could not initialize or access the chatbot database.")

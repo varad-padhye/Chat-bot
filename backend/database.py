@@ -1,8 +1,11 @@
 import os
+import threading
 from uuid import uuid4
 from typing import List, Optional, Sequence
 
 import psycopg2
+import psycopg2.extensions
+from psycopg2.pool import PoolError, ThreadedConnectionPool
 from psycopg2.extras import Json, execute_values
 from langchain_core.documents import Document
 
@@ -10,27 +13,74 @@ from langchain_core.documents import Document
 # PostgreSQL connection utilities
 # ---------------------------------------------------------------------------
 
-def get_connection():
-    """Create a new psycopg2 connection using env vars.
+_pool: Optional[ThreadedConnectionPool] = None
+_pool_lock = threading.Lock()
 
-    Required environment variables:
-        POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_HOST (optional, default 'localhost'),
-        POSTGRES_PORT (optional, default '5432'), POSTGRES_SSLMODE (optional, default 'prefer')
+
+class _PooledConnection(psycopg2.extensions.connection):
+    """A connection whose close() hands it back to the shared pool.
+
+    Callers keep their usual ``try: ... finally: conn.close()`` and no longer pay a
+    fresh TCP + TLS + auth handshake to the remote database on every query.
     """
-    user = os.getenv("POSTGRES_USER", "rag_user")
-    password = os.getenv("POSTGRES_PASSWORD", "rag_password")
-    db = os.getenv("POSTGRES_DB", "rag_db")
-    host = os.getenv("POSTGRES_HOST", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    sslmode = os.getenv("POSTGRES_SSLMODE", "prefer")
-    return psycopg2.connect(
-        dbname=db,
-        user=user,
-        password=password,
-        host=host,
-        port=port,
-        sslmode=sslmode,
-    )
+
+    _returning = False
+
+    def close(self):
+        if _pool is None or self._returning:
+            return super().close()
+        self._returning = True  # the pool calls close() itself when discarding; make that a real close
+        try:
+            # Rolls back an open transaction, drops broken connections, frees the pool slot.
+            _pool.putconn(self)
+        except PoolError:
+            pass  # already returned (double close)
+        finally:
+            self._returning = False
+
+
+def _get_pool() -> ThreadedConnectionPool:
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadedConnectionPool(
+                1,
+                10,
+                connection_factory=_PooledConnection,
+                dbname=os.getenv("POSTGRES_DB", "rag_db"),
+                user=os.getenv("POSTGRES_USER", "rag_user"),
+                password=os.getenv("POSTGRES_PASSWORD", "rag_password"),
+                host=os.getenv("POSTGRES_HOST", "localhost"),
+                port=os.getenv("POSTGRES_PORT", "5432"),
+                sslmode=os.getenv("POSTGRES_SSLMODE", "prefer"),
+                # Detect connections the network dropped while idle instead of hanging.
+                keepalives=1,
+                keepalives_idle=30,
+            )
+        return _pool
+
+
+def get_connection():
+    """Borrow a pooled psycopg2 connection configured from env vars.
+
+    Environment variables: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB,
+    POSTGRES_HOST (default 'localhost'), POSTGRES_PORT (default '5432'),
+    POSTGRES_SSLMODE (default 'prefer'). Call ``conn.close()`` to give it back.
+    """
+    pool = _get_pool()
+    for attempt in (1, 2):
+        conn = pool.getconn()
+        try:
+            # Idle connections can be cut by the server or network; check before handing out.
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+            conn.rollback()
+            return conn
+        except psycopg2.Error:
+            conn._returning = True  # so the pool's close() really closes it
+            pool.putconn(conn, close=True)
+            if attempt == 2:
+                raise
 
 
 def init_db():
